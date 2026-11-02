@@ -5,7 +5,7 @@ class ReportsService {
      * 1. Profit & Loss Statement (Income Statement)
      * Revenue - COGS - Operating Expenses = Operating Income, Net Profit
      */
-    static getProfitAndLoss({ startDate, endDate } = {}) {
+    static async getProfitAndLoss({ startDate, endDate } = {}) {
         let dateFilter = '';
         const params = [];
         if (startDate && endDate) {
@@ -14,7 +14,7 @@ class ReportsService {
         }
 
         // Revenue (type = 'REVENUE'): Normal balance is Credit (credit - debit)
-        const revenueAccounts = db.prepare(`
+        const revenueAccounts = await db.prepare(`
             SELECT 
                 coa.id, coa.code, coa.name, coa.sub_category,
                 COALESCE(SUM(ji.credit) - SUM(ji.debit), 0.0) as balance
@@ -27,7 +27,7 @@ class ReportsService {
         `).all(...params);
 
         // Cost of Goods Sold & Expenses (type = 'EXPENSE'): Normal balance is Debit (debit - credit)
-        const expenseAccounts = db.prepare(`
+        const expenseAccounts = await db.prepare(`
             SELECT 
                 coa.id, coa.code, coa.name, coa.sub_category,
                 COALESCE(SUM(ji.debit) - SUM(ji.credit), 0.0) as balance
@@ -39,15 +39,15 @@ class ReportsService {
             ORDER BY coa.code
         `).all(...params);
 
-        const totalRevenue = revenueAccounts.reduce((acc, row) => acc + row.balance, 0);
+        const totalRevenue = revenueAccounts.reduce((acc, row) => acc + (Number(row.balance) || 0), 0);
 
         const cogsAccounts = expenseAccounts.filter(a => a.sub_category === 'Cost of Goods Sold');
-        const totalCogs = cogsAccounts.reduce((acc, row) => acc + row.balance, 0);
+        const totalCogs = cogsAccounts.reduce((acc, row) => acc + (Number(row.balance) || 0), 0);
 
         const grossProfit = totalRevenue - totalCogs;
 
         const operatingExpenseAccounts = expenseAccounts.filter(a => a.sub_category !== 'Cost of Goods Sold');
-        const totalOperatingExpenses = operatingExpenseAccounts.reduce((acc, row) => acc + row.balance, 0);
+        const totalOperatingExpenses = operatingExpenseAccounts.reduce((acc, row) => acc + (Number(row.balance) || 0), 0);
 
         const netProfit = grossProfit - totalOperatingExpenses;
 
@@ -65,7 +65,7 @@ class ReportsService {
      * 2. Balance Sheet
      * Assets = Liabilities + Equity
      */
-    static getBalanceSheet({ asOfDate } = {}) {
+    static async getBalanceSheet({ asOfDate } = {}) {
         let dateFilter = '';
         const params = [];
         if (asOfDate) {
@@ -74,7 +74,7 @@ class ReportsService {
         }
 
         // Assets: Normal balance Debit (debit - credit)
-        const assets = db.prepare(`
+        const assets = await db.prepare(`
             SELECT 
                 coa.id, coa.code, coa.name, coa.sub_category,
                 COALESCE(SUM(ji.debit) - SUM(ji.credit), 0.0) as balance
@@ -83,12 +83,12 @@ class ReportsService {
             LEFT JOIN journal_entries je ON je.id = ji.journal_entry_id AND je.status = 'POSTED' ${dateFilter}
             WHERE coa.type = 'ASSET' AND coa.is_active = 1
             GROUP BY coa.id
-            HAVING balance != 0 OR coa.is_active = 1
+            HAVING (COALESCE(SUM(ji.debit) - SUM(ji.credit), 0.0) != 0 OR coa.is_active = 1)
             ORDER BY coa.code
         `).all(...params);
 
         // Liabilities: Normal balance Credit (credit - debit)
-        const liabilities = db.prepare(`
+        const liabilities = await db.prepare(`
             SELECT 
                 coa.id, coa.code, coa.name, coa.sub_category,
                 COALESCE(SUM(ji.credit) - SUM(ji.debit), 0.0) as balance
@@ -101,7 +101,7 @@ class ReportsService {
         `).all(...params);
 
         // Equity: Normal balance Credit (credit - debit)
-        const equity = db.prepare(`
+        const equity = await db.prepare(`
             SELECT 
                 coa.id, coa.code, coa.name, coa.sub_category,
                 COALESCE(SUM(ji.credit) - SUM(ji.debit), 0.0) as balance
@@ -114,12 +114,12 @@ class ReportsService {
         `).all(...params);
 
         // Retained Earnings calculation (Current Year Earnings from P&L up to asOfDate)
-        const pnl = this.getProfitAndLoss({ endDate: asOfDate });
+        const pnl = await this.getProfitAndLoss({ endDate: asOfDate });
         const currentYearEarnings = pnl.netProfit;
 
-        const totalAssets = assets.reduce((acc, row) => acc + row.balance, 0);
-        const totalLiabilities = liabilities.reduce((acc, row) => acc + row.balance, 0);
-        const baseEquityTotal = equity.reduce((acc, row) => acc + row.balance, 0);
+        const totalAssets = assets.reduce((acc, row) => acc + (Number(row.balance) || 0), 0);
+        const totalLiabilities = liabilities.reduce((acc, row) => acc + (Number(row.balance) || 0), 0);
+        const baseEquityTotal = equity.reduce((acc, row) => acc + (Number(row.balance) || 0), 0);
         const totalEquity = baseEquityTotal + currentYearEarnings;
         const totalLiabilitiesAndEquity = totalLiabilities + totalEquity;
 
@@ -153,7 +153,7 @@ class ReportsService {
      * 3. Cash Flow Statement
      * Operating, Investing, Financing activities
      */
-    static getCashFlowStatement({ startDate, endDate } = {}) {
+    static async getCashFlowStatement({ startDate, endDate } = {}) {
         let dateFilter = '';
         const params = [];
         if (startDate && endDate) {
@@ -162,55 +162,60 @@ class ReportsService {
         }
 
         // Cash flow from Operating Activities
-        const customerReceipts = db.prepare(`
+        const custRow = await db.prepare(`
             SELECT COALESCE(SUM(amount), 0.0) as total
             FROM payments
             WHERE payment_type = 'RECEIPT' AND entity_type = 'CUSTOMER'
             ${startDate && endDate ? 'AND payment_date BETWEEN ? AND ?' : ''}
-        `).get(...(startDate && endDate ? [startDate, endDate] : [])).total;
+        `).get(...(startDate && endDate ? [startDate, endDate] : []));
+        const customerReceipts = custRow ? Number(custRow.total) || 0 : 0;
 
-        const supplierPayments = db.prepare(`
+        const suppRow = await db.prepare(`
             SELECT COALESCE(SUM(amount), 0.0) as total
             FROM payments
             WHERE payment_type = 'DISBURSEMENT' AND entity_type = 'SUPPLIER'
             ${startDate && endDate ? 'AND payment_date BETWEEN ? AND ?' : ''}
-        `).get(...(startDate && endDate ? [startDate, endDate] : [])).total;
+        `).get(...(startDate && endDate ? [startDate, endDate] : []));
+        const supplierPayments = suppRow ? Number(suppRow.total) || 0 : 0;
 
-        const operatingExpenses = db.prepare(`
+        const expRow = await db.prepare(`
             SELECT COALESCE(SUM(total_amount), 0.0) as total
             FROM expenses
             WHERE status = 'POSTED'
             ${startDate && endDate ? 'AND expense_date BETWEEN ? AND ?' : ''}
-        `).get(...(startDate && endDate ? [startDate, endDate] : [])).total;
+        `).get(...(startDate && endDate ? [startDate, endDate] : []));
+        const operatingExpenses = expRow ? Number(expRow.total) || 0 : 0;
 
-        const payrollPayments = db.prepare(`
+        const payRow = await db.prepare(`
             SELECT COALESCE(SUM(net_payroll), 0.0) as total
             FROM payroll_runs
             WHERE status = 'POSTED'
             ${startDate && endDate ? 'AND payment_date BETWEEN ? AND ?' : ''}
-        `).get(...(startDate && endDate ? [startDate, endDate] : [])).total;
+        `).get(...(startDate && endDate ? [startDate, endDate] : []));
+        const payrollPayments = payRow ? Number(payRow.total) || 0 : 0;
 
         const netOperatingCash = customerReceipts - supplierPayments - operatingExpenses - payrollPayments;
 
         // Investing activities (Fixed assets purchased)
-        const investingRow = db.prepare(`
+        const investingRow = await db.prepare(`
             SELECT COALESCE(SUM(ji.debit) - SUM(ji.credit), 0.0) as total
             FROM journal_items ji
             JOIN journal_entries je ON je.id = ji.journal_entry_id AND je.status = 'POSTED' ${dateFilter}
             JOIN chart_of_accounts coa ON coa.id = ji.account_id
             WHERE coa.sub_category = 'Fixed Assets'
         `).get(...params);
-        const netInvestingCash = -investingRow.total;
+        const investingTotal = investingRow ? Number(investingRow.total) || 0 : 0;
+        const netInvestingCash = -investingTotal;
 
         // Financing activities
-        const financingRow = db.prepare(`
+        const financingRow = await db.prepare(`
             SELECT COALESCE(SUM(ji.credit) - SUM(ji.debit), 0.0) as total
             FROM journal_items ji
             JOIN journal_entries je ON je.id = ji.journal_entry_id AND je.status = 'POSTED' ${dateFilter}
             JOIN chart_of_accounts coa ON coa.id = ji.account_id
             WHERE coa.sub_category IN ('Common Stock', 'Owner Capital', 'Long Term Debt')
         `).get(...params);
-        const netFinancingCash = financingRow.total;
+        const netFinancingCash = financingRow ? Number(financingRow.total) || 0 : 0;
 
         const netCashChange = netOperatingCash + netInvestingCash + netFinancingCash;
 
@@ -224,11 +229,11 @@ class ReportsService {
                 netOperatingCash: Math.round(netOperatingCash * 100) / 100
             },
             investing: {
-                fixedAssetsPurchased: Math.round(investingRow.total * 100) / 100,
+                fixedAssetsPurchased: Math.round(investingTotal * 100) / 100,
                 netInvestingCash: Math.round(netInvestingCash * 100) / 100
             },
             financing: {
-                capitalAndDebt: Math.round(financingRow.total * 100) / 100,
+                capitalAndDebt: Math.round(netFinancingCash * 100) / 100,
                 netFinancingCash: Math.round(netFinancingCash * 100) / 100
             },
             netCashChange: Math.round(netCashChange * 100) / 100
@@ -239,7 +244,7 @@ class ReportsService {
      * 4. Trial Balance
      * Code, Account Name, Type, Total Debit, Total Credit, Net Debit, Net Credit
      */
-    static getTrialBalance({ asOfDate } = {}) {
+    static async getTrialBalance({ asOfDate } = {}) {
         let dateFilter = '';
         const params = [];
         if (asOfDate) {
@@ -247,7 +252,7 @@ class ReportsService {
             params.push(asOfDate);
         }
 
-        const rows = db.prepare(`
+        const rows = await db.prepare(`
             SELECT 
                 coa.id, coa.code, coa.name, coa.type, coa.sub_category,
                 COALESCE(SUM(ji.debit), 0.0) as total_debit,
@@ -264,7 +269,9 @@ class ReportsService {
         let sumCredit = 0;
 
         const accounts = rows.map(r => {
-            const net = r.total_debit - r.total_credit;
+            const rawDeb = Number(r.total_debit) || 0;
+            const rawCred = Number(r.total_credit) || 0;
+            const net = rawDeb - rawCred;
             let debitBalance = 0;
             let creditBalance = 0;
 
@@ -288,8 +295,8 @@ class ReportsService {
                 name: r.name,
                 type: r.type,
                 subCategory: r.sub_category,
-                rawDebit: r.total_debit,
-                rawCredit: r.total_credit,
+                rawDebit: rawDeb,
+                rawCredit: rawCred,
                 debit: debitBalance,
                 credit: creditBalance
             };
@@ -311,7 +318,7 @@ class ReportsService {
      * 5. General Ledger Report
      * Filterable by account and date range, calculates running balance
      */
-    static getGeneralLedgerReport({ accountId, startDate, endDate } = {}) {
+    static async getGeneralLedgerReport({ accountId, startDate, endDate } = {}) {
         let query = `
             SELECT 
                 je.id as entry_id, je.entry_number, je.posting_date, je.reference,
@@ -335,7 +342,7 @@ class ReportsService {
 
         query += ' ORDER BY coa.code, je.posting_date ASC, je.id ASC';
 
-        const rawRows = db.prepare(query).all(...params);
+        const rawRows = await db.prepare(query).all(...params);
 
         // Group by account and compute running balance
         const grouped = {};
@@ -352,7 +359,9 @@ class ReportsService {
             }
 
             const isDebitNormal = ['ASSET', 'EXPENSE'].includes(row.account_type);
-            const netChange = isDebitNormal ? (row.debit - row.credit) : (row.credit - row.debit);
+            const deb = Number(row.debit) || 0;
+            const cred = Number(row.credit) || 0;
+            const netChange = isDebitNormal ? (deb - cred) : (cred - deb);
             grouped[row.account_id].runningBalance = Math.round((grouped[row.account_id].runningBalance + netChange) * 100) / 100;
 
             grouped[row.account_id].transactions.push({
@@ -362,8 +371,8 @@ class ReportsService {
                 reference: row.reference,
                 sourceModule: row.source_module,
                 description: row.description,
-                debit: row.debit,
-                credit: row.credit,
+                debit: deb,
+                credit: cred,
                 balance: grouped[row.account_id].runningBalance
             });
         }
@@ -375,8 +384,8 @@ class ReportsService {
      * 6. Accounts Receivable Aging Report
      * Aging buckets: Current, 1-30, 31-60, 61-90, 90+ days
      */
-    static getArAging({ asOfDate = new Date().toISOString().split('T')[0] } = {}) {
-        const invoices = db.prepare(`
+    static async getArAging({ asOfDate = new Date().toISOString().split('T')[0] } = {}) {
+        const invoices = await db.prepare(`
             SELECT 
                 inv.id, inv.invoice_number, inv.invoice_date, inv.due_date,
                 inv.total_amount, inv.paid_amount, (inv.total_amount - inv.paid_amount) as balance_due,
@@ -411,7 +420,7 @@ class ReportsService {
             const dueDate = new Date(inv.due_date);
             const diffTime = asOf - dueDate;
             const daysPastDue = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-            const amount = Math.round(inv.balance_due * 100) / 100;
+            const amount = Math.round((Number(inv.balance_due) || 0) * 100) / 100;
 
             customerAging[inv.customer_id].totalDue += amount;
 
@@ -461,8 +470,8 @@ class ReportsService {
     /**
      * 7. Accounts Payable Aging Report
      */
-    static getApAging({ asOfDate = new Date().toISOString().split('T')[0] } = {}) {
-        const bills = db.prepare(`
+    static async getApAging({ asOfDate = new Date().toISOString().split('T')[0] } = {}) {
+        const bills = await db.prepare(`
             SELECT 
                 bill.id, bill.bill_number, bill.bill_date, bill.due_date,
                 bill.total_amount, bill.paid_amount, (bill.total_amount - bill.paid_amount) as balance_due,
@@ -497,7 +506,7 @@ class ReportsService {
             const dueDate = new Date(bill.due_date);
             const diffTime = asOf - dueDate;
             const daysPastDue = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-            const amount = Math.round(bill.balance_due * 100) / 100;
+            const amount = Math.round((Number(bill.balance_due) || 0) * 100) / 100;
 
             supplierAging[bill.supplier_id].totalDue += amount;
 
@@ -548,15 +557,8 @@ class ReportsService {
      * 8. Expense Report
      * Grouped by category and department
      */
-    static getExpenseReport({ startDate, endDate } = {}) {
-        let dateFilter = '';
-        const params = [];
-        if (startDate && endDate) {
-            dateFilter = 'WHERE e.expense_date BETWEEN ? AND ?';
-            params.push(startDate, endDate);
-        }
-
-        const byCategory = db.prepare(`
+    static async getExpenseReport({ startDate, endDate } = {}) {
+        const byCategory = await db.prepare(`
             SELECT ec.id, ec.name as category_name, COUNT(e.id) as count, COALESCE(SUM(e.total_amount), 0.0) as total
             FROM expense_categories ec
             LEFT JOIN expenses e ON e.category_id = ec.id AND e.status = 'POSTED' ${startDate && endDate ? 'AND e.expense_date BETWEEN ? AND ?' : ''}
@@ -564,7 +566,7 @@ class ReportsService {
             ORDER BY total DESC
         `).all(...(startDate && endDate ? [startDate, endDate] : []));
 
-        const byDepartment = db.prepare(`
+        const byDepartment = await db.prepare(`
             SELECT e.department, COUNT(e.id) as count, COALESCE(SUM(e.total_amount), 0.0) as total
             FROM expenses e
             WHERE e.status = 'POSTED' ${startDate && endDate ? 'AND e.expense_date BETWEEN ? AND ?' : ''}
@@ -572,7 +574,7 @@ class ReportsService {
             ORDER BY total DESC
         `).all(...(startDate && endDate ? [startDate, endDate] : []));
 
-        const totalExpenses = byCategory.reduce((acc, r) => acc + r.total, 0);
+        const totalExpenses = byCategory.reduce((acc, r) => acc + (Number(r.total) || 0), 0);
 
         return {
             period: { startDate: startDate || 'All Time', endDate: endDate || 'Current' },
@@ -586,8 +588,8 @@ class ReportsService {
      * 9. Sales Report
      * By customer, product, and month
      */
-    static getSalesReport({ startDate, endDate } = {}) {
-        const byCustomer = db.prepare(`
+    static async getSalesReport({ startDate, endDate } = {}) {
+        const byCustomer = await db.prepare(`
             SELECT c.id, c.code, c.name, COUNT(inv.id) as invoice_count, COALESCE(SUM(inv.total_amount), 0.0) as total_sales
             FROM customers c
             JOIN sales_invoices inv ON inv.customer_id = c.id AND inv.status IN ('POSTED', 'PAID', 'PARTIALLY_PAID')
@@ -596,7 +598,7 @@ class ReportsService {
             ORDER BY total_sales DESC
         `).all(...(startDate && endDate ? [startDate, endDate] : []));
 
-        const byMonth = db.prepare(`
+        const byMonth = await db.prepare(`
             SELECT strftime('%Y-%m', inv.invoice_date) as month, COUNT(inv.id) as count, SUM(inv.total_amount) as total
             FROM sales_invoices inv
             WHERE inv.status IN ('POSTED', 'PAID', 'PARTIALLY_PAID')
@@ -605,7 +607,7 @@ class ReportsService {
             ORDER BY month ASC
         `).all(...(startDate && endDate ? [startDate, endDate] : []));
 
-        const total = byCustomer.reduce((acc, r) => acc + r.total_sales, 0);
+        const total = byCustomer.reduce((acc, r) => acc + (Number(r.total_sales) || 0), 0);
 
         return {
             period: { startDate: startDate || 'All Time', endDate: endDate || 'Current' },
@@ -619,8 +621,8 @@ class ReportsService {
      * 10. Purchase Report
      * By supplier and month
      */
-    static getPurchaseReport({ startDate, endDate } = {}) {
-        const bySupplier = db.prepare(`
+    static async getPurchaseReport({ startDate, endDate } = {}) {
+        const bySupplier = await db.prepare(`
             SELECT s.id, s.code, s.name, COUNT(bill.id) as bill_count, COALESCE(SUM(bill.total_amount), 0.0) as total_purchases
             FROM suppliers s
             JOIN purchase_invoices bill ON bill.supplier_id = s.id AND bill.status IN ('POSTED', 'PAID', 'PARTIALLY_PAID')
@@ -629,7 +631,7 @@ class ReportsService {
             ORDER BY total_purchases DESC
         `).all(...(startDate && endDate ? [startDate, endDate] : []));
 
-        const total = bySupplier.reduce((acc, r) => acc + r.total_purchases, 0);
+        const total = bySupplier.reduce((acc, r) => acc + (Number(r.total_purchases) || 0), 0);
 
         return {
             period: { startDate: startDate || 'All Time', endDate: endDate || 'Current' },
@@ -642,7 +644,7 @@ class ReportsService {
      * 11. Tax Report
      * Input Tax (Purchases/Expenses) vs Output Tax (Sales), Net Tax Liability
      */
-    static getTaxReport({ startDate, endDate } = {}) {
+    static async getTaxReport({ startDate, endDate } = {}) {
         let dateFilterSales = '';
         let dateFilterPurchases = '';
         let dateFilterExpenses = '';
@@ -656,7 +658,7 @@ class ReportsService {
         }
 
         // Output Tax from Sales Invoices
-        const outputTax = db.prepare(`
+        const outputTax = await db.prepare(`
             SELECT 
                 tr.name as tax_name, tr.rate,
                 COUNT(item.id) as count,
@@ -669,7 +671,7 @@ class ReportsService {
         `).all(...(startDate && endDate ? [startDate, endDate] : []));
 
         // Input Tax from Purchase Invoices
-        const inputTaxBills = db.prepare(`
+        const inputTaxBills = await db.prepare(`
             SELECT 
                 tr.name as tax_name, tr.rate,
                 COUNT(item.id) as count,
@@ -682,7 +684,7 @@ class ReportsService {
         `).all(...(startDate && endDate ? [startDate, endDate] : []));
 
         // Input Tax from Expenses
-        const inputTaxExpenses = db.prepare(`
+        const inputTaxExpenses = await db.prepare(`
             SELECT 
                 tr.name as tax_name, tr.rate,
                 COUNT(e.id) as count,
@@ -694,9 +696,9 @@ class ReportsService {
             GROUP BY tr.id
         `).all(...(startDate && endDate ? [startDate, endDate] : []));
 
-        const totalOutputTax = outputTax.reduce((acc, r) => acc + r.tax_amount, 0);
-        const totalInputTaxBills = inputTaxBills.reduce((acc, r) => acc + r.tax_amount, 0);
-        const totalInputTaxExpenses = inputTaxExpenses.reduce((acc, r) => acc + r.tax_amount, 0);
+        const totalOutputTax = outputTax.reduce((acc, r) => acc + (Number(r.tax_amount) || 0), 0);
+        const totalInputTaxBills = inputTaxBills.reduce((acc, r) => acc + (Number(r.tax_amount) || 0), 0);
+        const totalInputTaxExpenses = inputTaxExpenses.reduce((acc, r) => acc + (Number(r.tax_amount) || 0), 0);
         const totalInputTax = totalInputTaxBills + totalInputTaxExpenses;
 
         const netTaxLiability = totalOutputTax - totalInputTax;
@@ -712,8 +714,8 @@ class ReportsService {
     /**
      * 12. Bank Reconciliation Report
      */
-    static getBankReconciliationReport(reconciliationId) {
-        const rec = db.prepare(`
+    static async getBankReconciliationReport(reconciliationId) {
+        const rec = await db.prepare(`
             SELECT br.*, ba.bank_name, ba.account_number, ba.currency
             FROM bank_reconciliations br
             JOIN bank_accounts ba ON ba.id = br.bank_account_id
@@ -722,7 +724,7 @@ class ReportsService {
 
         if (!rec) return null;
 
-        const clearedTransactions = db.prepare(`
+        const clearedTransactions = await db.prepare(`
             SELECT * FROM bank_transactions
             WHERE reconciliation_id = ?
             ORDER BY transaction_date ASC

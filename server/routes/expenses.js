@@ -5,24 +5,32 @@ const AccountingEngine = require('../services/accountingEngine');
 const AuditService = require('../services/auditService');
 
 // Expense Categories
-router.get('/categories', (req, res) => {
+router.get('/categories', async (req, res) => {
     try {
-        const categories = db.prepare(`
+        const categories = await db.prepare(`
             SELECT ec.*, coa.code as gl_account_code, coa.name as gl_account_name,
                    COUNT(e.id) as expense_count, COALESCE(SUM(e.total_amount), 0.0) as total_spent
             FROM expense_categories ec
             JOIN chart_of_accounts coa ON coa.id = ec.gl_account_id
             LEFT JOIN expenses e ON e.category_id = ec.id AND e.status = 'POSTED'
-            GROUP BY ec.id
+            GROUP BY ec.id, coa.code, coa.name
             ORDER BY ec.name ASC
         `).all();
-        res.json({ success: true, categories });
+
+        res.json({
+            success: true,
+            categories: categories.map(c => ({
+                ...c,
+                expense_count: Number(c.expense_count) || 0,
+                total_spent: Number(c.total_spent) || 0
+            }))
+        });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-router.post('/categories', (req, res) => {
+router.post('/categories', async (req, res) => {
     try {
         const { name, code, gl_account_id, description } = req.body;
         if (!name || !code || !gl_account_id) {
@@ -33,7 +41,7 @@ router.post('/categories', (req, res) => {
             INSERT INTO expense_categories (name, code, gl_account_id, description)
             VALUES (?, ?, ?, ?)
         `);
-        const result = stmt.run(name, code, gl_account_id, description);
+        const result = await stmt.run(name, code, gl_account_id, description);
         res.json({ success: true, id: result.lastInsertRowid, message: 'Expense category added.' });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
@@ -41,7 +49,7 @@ router.post('/categories', (req, res) => {
 });
 
 // Expenses List
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
     try {
         const { department, status, category_id } = req.query;
         let query = `
@@ -71,7 +79,7 @@ router.get('/', (req, res) => {
 
         query += ' ORDER BY e.expense_date DESC, e.id DESC';
 
-        const expenses = db.prepare(query).all(...params);
+        const expenses = await db.prepare(query).all(...params);
         res.json({ success: true, expenses });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
@@ -79,9 +87,9 @@ router.get('/', (req, res) => {
 });
 
 // Single Expense
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
     try {
-        const expense = db.prepare(`
+        const expense = await db.prepare(`
             SELECT e.*, ec.name as category_name, ba.bank_name,
                    tr.name as tax_rate_name, je.entry_number as journal_entry_number
             FROM expenses e
@@ -100,7 +108,7 @@ router.get('/:id', (req, res) => {
 });
 
 // Record New Expense
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
     try {
         const {
             category_id, vendor_name, expense_date, amount, tax_rate_id,
@@ -115,15 +123,15 @@ router.post('/', (req, res) => {
         const netAmount = Number(amount);
         let taxAmount = 0;
         if (tax_rate_id) {
-            const tr = db.prepare('SELECT rate FROM tax_rates WHERE id = ?').get(tax_rate_id);
-            if (tr) taxAmount = Math.round((netAmount * (tr.rate / 100)) * 100) / 100;
+            const tr = await db.prepare('SELECT rate FROM tax_rates WHERE id = ?').get(tax_rate_id);
+            if (tr) taxAmount = Math.round((netAmount * ((Number(tr.rate) || 0) / 100)) * 100) / 100;
         }
         const totalAmount = Math.round((netAmount + taxAmount) * 100) / 100;
 
-        const expense_number = AccountingEngine.getNextNumber('EXP');
+        const expense_number = await AccountingEngine.getNextNumber('EXP');
         const username = req.user ? req.user.username : 'Admin';
 
-        const tx = db.transaction(() => {
+        const tx = db.transaction(async () => {
             const stmt = db.prepare(`
                 INSERT INTO expenses (
                     expense_number, category_id, vendor_name, expense_date, amount,
@@ -132,7 +140,7 @@ router.post('/', (req, res) => {
                     description, created_by
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SUBMITTED', ?, ?, ?, ?, ?)
             `);
-            const result = stmt.run(
+            const result = await stmt.run(
                 expense_number, category_id, vendor_name || '', expense_date, netAmount,
                 tax_rate_id || null, taxAmount, totalAmount, payment_account_id,
                 department, receipt_path || null, is_recurring ? 1 : 0, recurring_frequency || null,
@@ -142,13 +150,13 @@ router.post('/', (req, res) => {
 
             let jeResult = null;
             if (auto_post) {
-                jeResult = AccountingEngine.postExpense(expenseId, username);
+                jeResult = await AccountingEngine.postExpense(expenseId, username);
             }
 
             return { expenseId, expense_number, totalAmount, jeResult };
         });
 
-        const resData = tx();
+        const resData = await tx();
         res.json({ success: true, ...resData, message: `Expense ${expense_number} recorded and posted.` });
     } catch (err) {
         res.status(400).json({ success: false, error: err.message });
@@ -156,10 +164,10 @@ router.post('/', (req, res) => {
 });
 
 // Approve & Post an Expense
-router.post('/:id/approve', (req, res) => {
+router.post('/:id/approve', async (req, res) => {
     try {
         const username = req.user ? req.user.username : 'Admin';
-        const jeResult = AccountingEngine.postExpense(req.params.id, username);
+        const jeResult = await AccountingEngine.postExpense(req.params.id, username);
         res.json({ success: true, ...jeResult, message: 'Expense approved and posted to General Ledger.' });
     } catch (err) {
         res.status(400).json({ success: false, error: err.message });

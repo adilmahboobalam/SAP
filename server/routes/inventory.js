@@ -5,25 +5,28 @@ const AccountingEngine = require('../services/accountingEngine');
 const AuditService = require('../services/auditService');
 
 // Product Categories
-router.get('/categories', (req, res) => {
+router.get('/categories', async (req, res) => {
     try {
-        const categories = db.prepare(`
+        const categories = await db.prepare(`
             SELECT pc.*, COUNT(p.id) as product_count
             FROM product_categories pc
             LEFT JOIN products p ON p.category_id = pc.id
             GROUP BY pc.id
             ORDER BY pc.name ASC
         `).all();
-        res.json({ success: true, categories });
+        res.json({
+            success: true,
+            categories: categories.map(c => ({ ...c, product_count: Number(c.product_count) || 0 }))
+        });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
 // Products List
-router.get('/products', (req, res) => {
+router.get('/products', async (req, res) => {
     try {
-        const products = db.prepare(`
+        const products = await db.prepare(`
             SELECT p.*, pc.name as category_name,
                    (p.current_stock * p.cost_price) as inventory_value,
                    CASE WHEN p.current_stock <= p.reorder_level THEN 1 ELSE 0 END as is_low_stock
@@ -31,27 +34,36 @@ router.get('/products', (req, res) => {
             LEFT JOIN product_categories pc ON pc.id = p.category_id
             ORDER BY p.name ASC
         `).all();
-        res.json({ success: true, products });
+        res.json({
+            success: true,
+            products: products.map(p => ({
+                ...p,
+                cost_price: Number(p.cost_price) || 0,
+                selling_price: Number(p.selling_price) || 0,
+                current_stock: Number(p.current_stock) || 0,
+                inventory_value: Math.round(((Number(p.current_stock) || 0) * (Number(p.cost_price) || 0)) * 100) / 100
+            }))
+        });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
 // Create Product
-router.post('/products', (req, res) => {
+router.post('/products', async (req, res) => {
     try {
         const { sku, name, category_id, unit = 'Unit', cost_price = 0, selling_price = 0, current_stock = 0, reorder_level = 10 } = req.body;
         if (!sku || !name) return res.status(400).json({ success: false, error: 'SKU and Product Name are required.' });
 
-        const revAcc = AccountingEngine.getAccountByCode('40000');
-        const cogsAcc = AccountingEngine.getAccountByCode('50000');
-        const invAcc = AccountingEngine.getAccountByCode('13000');
+        const revAcc = await AccountingEngine.getAccountByCode('40000');
+        const cogsAcc = await AccountingEngine.getAccountByCode('50000');
+        const invAcc = await AccountingEngine.getAccountByCode('13000');
 
         const stmt = db.prepare(`
             INSERT INTO products (sku, name, category_id, unit, cost_price, selling_price, current_stock, reorder_level, inventory_account_id, revenue_account_id, cogs_account_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
-        const result = stmt.run(sku, name, category_id || null, unit, cost_price, selling_price, current_stock, reorder_level, invAcc.id, revAcc.id, cogsAcc.id);
+        const result = await stmt.run(sku, name, category_id || null, unit, cost_price, selling_price, current_stock, reorder_level, invAcc.id, revAcc.id, cogsAcc.id);
 
         res.json({ success: true, id: result.lastInsertRowid, message: 'Product added successfully.' });
     } catch (err) {
@@ -60,7 +72,7 @@ router.post('/products', (req, res) => {
 });
 
 // Stock Movements
-router.get('/movements', (req, res) => {
+router.get('/movements', async (req, res) => {
     try {
         const { product_id } = req.query;
         let query = `
@@ -77,51 +89,49 @@ router.get('/movements', (req, res) => {
         }
         query += ' ORDER BY sm.movement_date DESC, sm.id DESC LIMIT 100';
 
-        const movements = db.prepare(query).all(...params);
+        const movements = await db.prepare(query).all(...params);
         res.json({ success: true, movements });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-// Stock Adjustment (Physical Count Adjustment In / Out with double-entry journal)
-router.post('/adjustments', (req, res) => {
+// Stock Adjustment
+router.post('/adjustments', async (req, res) => {
     try {
         const { product_id, adjustment_type, quantity, notes } = req.body;
         if (!product_id || !adjustment_type || !quantity || Number(quantity) <= 0) {
             return res.status(400).json({ success: false, error: 'Product, Adjustment Type (ADJUSTMENT_IN or ADJUSTMENT_OUT), and Quantity are required.' });
         }
 
-        const prod = db.prepare('SELECT * FROM products WHERE id = ?').get(product_id);
+        const prod = await db.prepare('SELECT * FROM products WHERE id = ?').get(product_id);
         if (!prod) return res.status(404).json({ success: false, error: 'Product not found.' });
 
         const qty = Number(quantity);
-        const totalVal = Math.round(qty * prod.cost_price * 100) / 100;
+        const totalVal = Math.round(qty * (Number(prod.cost_price) || 0) * 100) / 100;
         const username = req.user ? req.user.username : 'Admin';
         const today = new Date().toISOString().split('T')[0];
 
-        const invAcc = AccountingEngine.getAccountByCode('13000');
-        const varianceAcc = AccountingEngine.getAccountByCode('50200'); // Inventory Shrinkage & Adjustments
+        const invAcc = await AccountingEngine.getAccountByCode('13000');
+        const varianceAcc = await AccountingEngine.getAccountByCode('50200');
 
-        const tx = db.transaction(() => {
+        const tx = db.transaction(async () => {
             let items = [];
             if (adjustment_type === 'ADJUSTMENT_IN') {
-                // Dr Inventory Asset, Cr Inventory Gain
                 items = [
                     { accountId: invAcc.id, debit: totalVal, credit: 0, description: `Stock Adjustment In: ${prod.name}` },
                     { accountId: varianceAcc.id, debit: 0, credit: totalVal, description: `Inventory Gain - ${notes || ''}` }
                 ];
-                db.prepare('UPDATE products SET current_stock = current_stock + ? WHERE id = ?').run(qty, product_id);
+                await db.prepare('UPDATE products SET current_stock = current_stock + ? WHERE id = ?').run(qty, product_id);
             } else {
-                // Dr Inventory Shrinkage/Loss, Cr Inventory Asset
                 items = [
                     { accountId: varianceAcc.id, debit: totalVal, credit: 0, description: `Inventory Shrinkage/Loss - ${notes || ''}` },
                     { accountId: invAcc.id, debit: 0, credit: totalVal, description: `Stock Adjustment Out: ${prod.name}` }
                 ];
-                db.prepare('UPDATE products SET current_stock = current_stock - ? WHERE id = ?').run(qty, product_id);
+                await db.prepare('UPDATE products SET current_stock = current_stock - ? WHERE id = ?').run(qty, product_id);
             }
 
-            const jeResult = AccountingEngine.postJournalEntry({
+            const jeResult = await AccountingEngine.postJournalEntry({
                 entryDate: today,
                 postingDate: today,
                 reference: 'STOCK-ADJ',
@@ -132,7 +142,7 @@ router.post('/adjustments', (req, res) => {
                 username
             });
 
-            db.prepare(`
+            await db.prepare(`
                 INSERT INTO stock_movements (product_id, movement_date, movement_type, quantity, unit_cost, total_cost, reference, notes, journal_entry_id)
                 VALUES (?, ?, ?, ?, ?, ?, 'STOCK-ADJ', ?, ?)
             `).run(product_id, today, adjustment_type, adjustment_type === 'ADJUSTMENT_IN' ? qty : -qty, prod.cost_price, totalVal, notes, jeResult.journalEntryId);
@@ -140,7 +150,7 @@ router.post('/adjustments', (req, res) => {
             return { jeResult, totalVal };
         });
 
-        const resData = tx();
+        const resData = await tx();
         res.json({ success: true, ...resData, message: 'Stock adjustment posted and inventory ledger balanced.' });
     } catch (err) {
         res.status(400).json({ success: false, error: err.message });
@@ -148,9 +158,9 @@ router.post('/adjustments', (req, res) => {
 });
 
 // Inventory Valuation Summary
-router.get('/valuation', (req, res) => {
+router.get('/valuation', async (req, res) => {
     try {
-        const items = db.prepare(`
+        const items = await db.prepare(`
             SELECT 
                 p.id, p.sku, p.name, p.unit, p.cost_price, p.selling_price, p.current_stock,
                 (p.current_stock * p.cost_price) as asset_value,
@@ -161,11 +171,19 @@ router.get('/valuation', (req, res) => {
             ORDER BY asset_value DESC
         `).all();
 
-        const totalInventoryValue = items.reduce((acc, i) => acc + i.asset_value, 0);
+        const mapped = items.map(i => ({
+            ...i,
+            cost_price: Number(i.cost_price) || 0,
+            selling_price: Number(i.selling_price) || 0,
+            current_stock: Number(i.current_stock) || 0,
+            asset_value: Math.round(((Number(i.current_stock) || 0) * (Number(i.cost_price) || 0)) * 100) / 100
+        }));
+
+        const totalInventoryValue = mapped.reduce((acc, i) => acc + i.asset_value, 0);
 
         res.json({
             success: true,
-            items,
+            items: mapped,
             totalInventoryValue: Math.round(totalInventoryValue * 100) / 100
         });
     } catch (err) {

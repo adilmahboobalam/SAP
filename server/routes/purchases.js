@@ -5,9 +5,9 @@ const AccountingEngine = require('../services/accountingEngine');
 const AuditService = require('../services/auditService');
 
 // 1. Suppliers
-router.get('/suppliers', (req, res) => {
+router.get('/suppliers', async (req, res) => {
     try {
-        const suppliers = db.prepare(`
+        const suppliers = await db.prepare(`
             SELECT 
                 s.*,
                 COALESCE(SUM(CASE WHEN bill.status IN ('POSTED', 'PARTIALLY_PAID', 'OVERDUE') THEN (bill.total_amount - bill.paid_amount) ELSE 0 END), 0.0) as outstanding_balance,
@@ -18,27 +18,35 @@ router.get('/suppliers', (req, res) => {
             ORDER BY s.name ASC
         `).all();
 
-        res.json({ success: true, suppliers });
+        res.json({
+            success: true,
+            suppliers: suppliers.map(s => ({
+                ...s,
+                outstanding_balance: Number(s.outstanding_balance) || 0,
+                bill_count: Number(s.bill_count) || 0
+            }))
+        });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-router.post('/suppliers', (req, res) => {
+router.post('/suppliers', async (req, res) => {
     try {
         const { name, email, phone, tax_number, address, city, payment_terms = 30 } = req.body;
         if (!name) return res.status(400).json({ success: false, error: 'Supplier name is required' });
 
-        const count = db.prepare('SELECT COUNT(*) as count FROM suppliers').get().count;
+        const countRow = await db.prepare('SELECT COUNT(*) as count FROM suppliers').get();
+        const count = countRow ? Number(countRow.count) : 0;
         const code = `SUPP-${String(count + 1).padStart(3, '0')}`;
 
         const stmt = db.prepare(`
             INSERT INTO suppliers (code, name, email, phone, tax_number, address, city, payment_terms)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `);
-        const result = stmt.run(code, name, email, phone, tax_number, address, city, payment_terms);
+        const result = await stmt.run(code, name, email, phone, tax_number, address, city, payment_terms);
 
-        AuditService.log({
+        await AuditService.log({
             username: req.user ? req.user.username : 'Admin',
             action: 'CREATE_SUPPLIER',
             entity: 'Supplier',
@@ -52,16 +60,16 @@ router.post('/suppliers', (req, res) => {
     }
 });
 
-router.get('/suppliers/:id/statement', (req, res) => {
+router.get('/suppliers/:id/statement', async (req, res) => {
     try {
-        const supplier = db.prepare('SELECT * FROM suppliers WHERE id = ?').get(req.params.id);
+        const supplier = await db.prepare('SELECT * FROM suppliers WHERE id = ?').get(req.params.id);
         if (!supplier) return res.status(404).json({ success: false, error: 'Supplier not found' });
 
-        const bills = db.prepare(`
+        const bills = await db.prepare(`
             SELECT * FROM purchase_invoices WHERE supplier_id = ? ORDER BY bill_date DESC
         `).all(supplier.id);
 
-        const payments = db.prepare(`
+        const payments = await db.prepare(`
             SELECT * FROM payments WHERE entity_type = 'SUPPLIER' AND entity_id = ? ORDER BY payment_date DESC
         `).all(supplier.id);
 
@@ -72,9 +80,9 @@ router.get('/suppliers/:id/statement', (req, res) => {
 });
 
 // 2. Purchase Orders
-router.get('/orders', (req, res) => {
+router.get('/orders', async (req, res) => {
     try {
-        const orders = db.prepare(`
+        const orders = await db.prepare(`
             SELECT po.*, s.name as supplier_name, s.code as supplier_code
             FROM purchase_orders po
             JOIN suppliers s ON s.id = po.supplier_id
@@ -86,16 +94,16 @@ router.get('/orders', (req, res) => {
     }
 });
 
-router.post('/orders', (req, res) => {
+router.post('/orders', async (req, res) => {
     try {
         const { supplier_id, order_date, expected_date, subtotal, tax_amount, total_amount, notes } = req.body;
-        const order_number = AccountingEngine.getNextNumber('PO');
+        const order_number = await AccountingEngine.getNextNumber('PO');
 
         const stmt = db.prepare(`
             INSERT INTO purchase_orders (order_number, supplier_id, order_date, expected_date, status, subtotal, tax_amount, total_amount, notes)
             VALUES (?, ?, ?, ?, 'CONFIRMED', ?, ?, ?, ?)
         `);
-        const result = stmt.run(order_number, supplier_id, order_date, expected_date, subtotal, tax_amount, total_amount, notes);
+        const result = await stmt.run(order_number, supplier_id, order_date, expected_date, subtotal, tax_amount, total_amount, notes);
 
         res.json({ success: true, id: result.lastInsertRowid, order_number });
     } catch (err) {
@@ -104,9 +112,9 @@ router.post('/orders', (req, res) => {
 });
 
 // 3. Purchase Invoices (Vendor Bills)
-router.get('/invoices', (req, res) => {
+router.get('/invoices', async (req, res) => {
     try {
-        const bills = db.prepare(`
+        const bills = await db.prepare(`
             SELECT bill.*, s.name as supplier_name, s.code as supplier_code,
                    (bill.total_amount - bill.paid_amount) as balance_due,
                    je.entry_number as journal_entry_number
@@ -122,9 +130,9 @@ router.get('/invoices', (req, res) => {
     }
 });
 
-router.get('/invoices/:id', (req, res) => {
+router.get('/invoices/:id', async (req, res) => {
     try {
-        const bill = db.prepare(`
+        const bill = await db.prepare(`
             SELECT bill.*, s.name as supplier_name, s.code as supplier_code, s.email as supplier_email,
                    (bill.total_amount - bill.paid_amount) as balance_due,
                    je.entry_number as journal_entry_number
@@ -136,7 +144,7 @@ router.get('/invoices/:id', (req, res) => {
 
         if (!bill) return res.status(404).json({ success: false, error: 'Bill not found' });
 
-        const items = db.prepare(`
+        const items = await db.prepare(`
             SELECT item.*, p.name as product_name, p.sku as product_sku, coa.name as expense_account_name,
                    tr.name as tax_rate_name, tr.rate as tax_rate
             FROM purchase_invoice_items item
@@ -146,7 +154,7 @@ router.get('/invoices/:id', (req, res) => {
             WHERE item.invoice_id = ?
         `).all(bill.id);
 
-        const payments = db.prepare(`
+        const payments = await db.prepare(`
             SELECT p.*, ba.bank_name
             FROM payments p
             JOIN bank_accounts ba ON ba.id = p.bank_account_id
@@ -161,26 +169,27 @@ router.get('/invoices/:id', (req, res) => {
 });
 
 // Create Vendor Bill
-router.post('/invoices', (req, res) => {
+router.post('/invoices', async (req, res) => {
     try {
         const { supplier_id, order_id, bill_date, due_date, items, notes, auto_post = true } = req.body;
         if (!supplier_id || !bill_date || !due_date || !items || !items.length) {
             return res.status(400).json({ success: false, error: 'Supplier, Dates, and Line Items are required.' });
         }
 
-        const bill_number = AccountingEngine.getNextNumber('BILL');
+        const bill_number = await AccountingEngine.getNextNumber('BILL');
         let subtotal = 0;
         let totalTax = 0;
 
-        const calculatedItems = items.map(item => {
+        const calculatedItems = [];
+        for (const item of items) {
             const qty = Number(item.quantity) || 1;
             const price = Number(item.unit_price) || 0;
             const lineSubtotal = Math.round(qty * price * 100) / 100;
 
             let taxRate = 0;
             if (item.tax_rate_id) {
-                const tr = db.prepare('SELECT rate FROM tax_rates WHERE id = ?').get(item.tax_rate_id);
-                if (tr) taxRate = tr.rate;
+                const tr = await db.prepare('SELECT rate FROM tax_rates WHERE id = ?').get(item.tax_rate_id);
+                if (tr) taxRate = Number(tr.rate) || 0;
             }
             const itemTax = Math.round((lineSubtotal * (taxRate / 100)) * 100) / 100;
             const lineTotal = lineSubtotal + itemTax;
@@ -188,20 +197,20 @@ router.post('/invoices', (req, res) => {
             subtotal += lineSubtotal;
             totalTax += itemTax;
 
-            return {
+            calculatedItems.push({
                 ...item,
                 quantity: qty,
                 unit_price: price,
                 tax_amount: itemTax,
                 line_total: lineTotal
-            };
-        });
+            });
+        }
 
         const totalAmount = Math.round((subtotal + totalTax) * 100) / 100;
         const username = req.user ? req.user.username : 'Admin';
 
-        const tx = db.transaction(() => {
-            const result = db.prepare(`
+        const tx = db.transaction(async () => {
+            const result = await db.prepare(`
                 INSERT INTO purchase_invoices (bill_number, supplier_id, order_id, bill_date, due_date, status, subtotal, tax_amount, total_amount, paid_amount, notes, created_by)
                 VALUES (?, ?, ?, ?, ?, 'DRAFT', ?, ?, ?, 0.0, ?, ?)
             `).run(bill_number, supplier_id, order_id || null, bill_date, due_date, subtotal, totalTax, totalAmount, notes, username);
@@ -214,7 +223,7 @@ router.post('/invoices', (req, res) => {
             `);
 
             for (const item of calculatedItems) {
-                insertItem.run(
+                await insertItem.run(
                     billId,
                     item.product_id || null,
                     item.expense_account_id || null,
@@ -229,13 +238,13 @@ router.post('/invoices', (req, res) => {
 
             let jeResult = null;
             if (auto_post) {
-                jeResult = AccountingEngine.postPurchaseInvoice(billId, username);
+                jeResult = await AccountingEngine.postPurchaseInvoice(billId, username);
             }
 
             return { billId, bill_number, totalAmount, jeResult };
         });
 
-        const resData = tx();
+        const resData = await tx();
         res.json({ success: true, ...resData, message: `Vendor Bill ${bill_number} created and posted successfully.` });
     } catch (err) {
         res.status(400).json({ success: false, error: err.message });
@@ -243,10 +252,10 @@ router.post('/invoices', (req, res) => {
 });
 
 // Post an existing Draft Bill
-router.post('/invoices/:id/post', (req, res) => {
+router.post('/invoices/:id/post', async (req, res) => {
     try {
         const username = req.user ? req.user.username : 'Admin';
-        const jeResult = AccountingEngine.postPurchaseInvoice(req.params.id, username);
+        const jeResult = await AccountingEngine.postPurchaseInvoice(req.params.id, username);
         res.json({ success: true, ...jeResult, message: 'Vendor Bill posted to General Ledger.' });
     } catch (err) {
         res.status(400).json({ success: false, error: err.message });
@@ -254,9 +263,9 @@ router.post('/invoices/:id/post', (req, res) => {
 });
 
 // 4. Supplier Payments (Disbursements)
-router.get('/payments', (req, res) => {
+router.get('/payments', async (req, res) => {
     try {
-        const payments = db.prepare(`
+        const payments = await db.prepare(`
             SELECT p.*, s.name as supplier_name, s.code as supplier_code,
                    bill.bill_number, ba.bank_name, je.entry_number as journal_entry_number
             FROM payments p
@@ -274,29 +283,29 @@ router.get('/payments', (req, res) => {
     }
 });
 
-router.post('/payments', (req, res) => {
+router.post('/payments', async (req, res) => {
     try {
         const { supplier_id, invoice_id, payment_date, bank_account_id, payment_method = 'BANK_TRANSFER', amount, reference, notes } = req.body;
         if (!supplier_id || !payment_date || !bank_account_id || !amount) {
             return res.status(400).json({ success: false, error: 'Supplier, Date, Bank Account, and Amount are required.' });
         }
 
-        const payment_number = AccountingEngine.getNextNumber('PAY');
+        const payment_number = await AccountingEngine.getNextNumber('PAY');
         const username = req.user ? req.user.username : 'Admin';
 
-        const tx = db.transaction(() => {
-            const result = db.prepare(`
+        const tx = db.transaction(async () => {
+            const result = await db.prepare(`
                 INSERT INTO payments (payment_number, payment_type, entity_type, entity_id, invoice_id, payment_date, bank_account_id, payment_method, amount, reference, notes, created_by)
                 VALUES (?, 'DISBURSEMENT', 'SUPPLIER', ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `).run(payment_number, supplier_id, invoice_id || null, payment_date, bank_account_id, payment_method, amount, reference, notes, username);
 
             const paymentId = result.lastInsertRowid;
-            const jeResult = AccountingEngine.postSupplierPayment(paymentId, username);
+            const jeResult = await AccountingEngine.postSupplierPayment(paymentId, username);
 
             return { paymentId, payment_number, amount, jeResult };
         });
 
-        const resData = tx();
+        const resData = await tx();
         res.json({ success: true, ...resData, message: `Supplier payment ${payment_number} successfully recorded.` });
     } catch (err) {
         res.status(400).json({ success: false, error: err.message });
@@ -304,9 +313,9 @@ router.post('/payments', (req, res) => {
 });
 
 // 5. Debit Notes
-router.get('/debit-notes', (req, res) => {
+router.get('/debit-notes', async (req, res) => {
     try {
-        const notes = db.prepare(`
+        const notes = await db.prepare(`
             SELECT dn.*, s.name as supplier_name, bill.bill_number
             FROM debit_notes dn
             JOIN suppliers s ON s.id = dn.supplier_id
@@ -319,22 +328,21 @@ router.get('/debit-notes', (req, res) => {
     }
 });
 
-router.post('/debit-notes', (req, res) => {
+router.post('/debit-notes', async (req, res) => {
     try {
         const { bill_id, supplier_id, note_date, amount, reason } = req.body;
         if (!bill_id || !supplier_id || !amount || !reason) {
             return res.status(400).json({ success: false, error: 'Bill, Supplier, Amount, and Reason are required.' });
         }
 
-        const note_number = AccountingEngine.getNextNumber('DN');
+        const note_number = await AccountingEngine.getNextNumber('DN');
         const username = req.user ? req.user.username : 'Admin';
 
-        const apAccount = AccountingEngine.getAccountByCode('20000');
-        const cogsAccount = AccountingEngine.getAccountByCode('50000');
+        const apAccount = await AccountingEngine.getAccountByCode('20000');
+        const cogsAccount = await AccountingEngine.getAccountByCode('50000');
 
-        const tx = db.transaction(() => {
-            // Post journal entry: Dr Accounts Payable, Cr Cost of Goods / Expense
-            const jeResult = AccountingEngine.postJournalEntry({
+        const tx = db.transaction(async () => {
+            const jeResult = await AccountingEngine.postJournalEntry({
                 entryDate: note_date,
                 postingDate: note_date,
                 reference: note_number,
@@ -348,12 +356,12 @@ router.post('/debit-notes', (req, res) => {
                 username
             });
 
-            const result = db.prepare(`
+            const result = await db.prepare(`
                 INSERT INTO debit_notes (note_number, bill_id, supplier_id, note_date, amount, reason, status, journal_entry_id)
                 VALUES (?, ?, ?, ?, ?, ?, 'POSTED', ?)
             `).run(note_number, bill_id, supplier_id, note_date, amount, reason, jeResult.journalEntryId);
 
-            db.prepare(`
+            await db.prepare(`
                 UPDATE purchase_invoices
                 SET paid_amount = paid_amount + ?
                 WHERE id = ?
@@ -362,7 +370,7 @@ router.post('/debit-notes', (req, res) => {
             return { debitNoteId: result.lastInsertRowid, note_number, jeResult };
         });
 
-        const resData = tx();
+        const resData = await tx();
         res.json({ success: true, ...resData, message: `Debit Note ${note_number} posted and vendor balance adjusted.` });
     } catch (err) {
         res.status(400).json({ success: false, error: err.message });

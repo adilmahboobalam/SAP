@@ -6,7 +6,7 @@ const ReportsService = require('../services/reportsService');
 const AuditService = require('../services/auditService');
 
 // Chart of Accounts: List all accounts with calculated current balance
-router.get('/accounts', (req, res) => {
+router.get('/accounts', async (req, res) => {
     try {
         const { type, is_active } = req.query;
         let query = `
@@ -32,9 +32,12 @@ router.get('/accounts', (req, res) => {
 
         query += ' GROUP BY coa.id ORDER BY coa.code ASC';
 
-        const accounts = db.prepare(query).all(...params).map(acc => {
+        const rows = await db.prepare(query).all(...params);
+        const accounts = rows.map(acc => {
+            const deb = Number(acc.total_debit) || 0;
+            const cred = Number(acc.total_credit) || 0;
             const isDebitNormal = ['ASSET', 'EXPENSE'].includes(acc.type);
-            const balance = isDebitNormal ? (acc.total_debit - acc.total_credit) : (acc.total_credit - acc.total_debit);
+            const balance = isDebitNormal ? (deb - cred) : (cred - deb);
             return {
                 ...acc,
                 balance: Math.round(balance * 100) / 100
@@ -48,7 +51,7 @@ router.get('/accounts', (req, res) => {
 });
 
 // Chart of Accounts: Create new account
-router.post('/accounts', (req, res) => {
+router.post('/accounts', async (req, res) => {
     try {
         const { code, name, type, sub_category, currency = 'USD', description = '', is_reconcilable = 0 } = req.body;
         if (!code || !name || !type || !sub_category) {
@@ -60,7 +63,7 @@ router.post('/accounts', (req, res) => {
             return res.status(400).json({ success: false, error: `Invalid account type. Must be one of: ${validTypes.join(', ')}` });
         }
 
-        const exists = db.prepare('SELECT id FROM chart_of_accounts WHERE code = ?').get(code);
+        const exists = await db.prepare('SELECT id FROM chart_of_accounts WHERE code = ?').get(code);
         if (exists) {
             return res.status(400).json({ success: false, error: `Account with code ${code} already exists.` });
         }
@@ -69,9 +72,9 @@ router.post('/accounts', (req, res) => {
             INSERT INTO chart_of_accounts (code, name, type, sub_category, currency, is_reconcilable, description)
             VALUES (?, ?, ?, ?, ?, ?, ?)
         `);
-        const result = stmt.run(code, name, type, sub_category, currency, is_reconcilable ? 1 : 0, description);
+        const result = await stmt.run(code, name, type, sub_category, currency, is_reconcilable ? 1 : 0, description);
 
-        AuditService.log({
+        await AuditService.log({
             username: req.user ? req.user.username : 'Admin',
             action: 'CREATE_ACCOUNT',
             entity: 'ChartOfAccounts',
@@ -86,7 +89,7 @@ router.post('/accounts', (req, res) => {
 });
 
 // Journal Entries: List with filtering and pagination
-router.get('/journals', (req, res) => {
+router.get('/journals', async (req, res) => {
     try {
         const { source, status, search, limit = 50, offset = 0 } = req.query;
         let query = 'SELECT * FROM journal_entries WHERE 1=1';
@@ -109,9 +112,8 @@ router.get('/journals', (req, res) => {
         query += ' ORDER BY posting_date DESC, id DESC LIMIT ? OFFSET ?';
         params.push(Number(limit), Number(offset));
 
-        const entries = db.prepare(query).all(...params);
+        const entries = await db.prepare(query).all(...params);
 
-        // Fetch line items for each entry
         const getItems = db.prepare(`
             SELECT ji.*, coa.code as account_code, coa.name as account_name, coa.type as account_type
             FROM journal_items ji
@@ -120,10 +122,10 @@ router.get('/journals', (req, res) => {
             ORDER BY ji.debit DESC, ji.id ASC
         `);
 
-        const enriched = entries.map(entry => ({
+        const enriched = await Promise.all(entries.map(async entry => ({
             ...entry,
-            items: getItems.all(entry.id)
-        }));
+            items: await getItems.all(entry.id)
+        })));
 
         res.json({ success: true, entries: enriched });
     } catch (err) {
@@ -132,14 +134,14 @@ router.get('/journals', (req, res) => {
 });
 
 // Journal Entry: Get single by ID
-router.get('/journals/:id', (req, res) => {
+router.get('/journals/:id', async (req, res) => {
     try {
-        const entry = db.prepare('SELECT * FROM journal_entries WHERE id = ?').get(req.params.id);
+        const entry = await db.prepare('SELECT * FROM journal_entries WHERE id = ?').get(req.params.id);
         if (!entry) {
             return res.status(404).json({ success: false, error: 'Journal entry not found' });
         }
 
-        const items = db.prepare(`
+        const items = await db.prepare(`
             SELECT ji.*, coa.code as account_code, coa.name as account_name, coa.type as account_type
             FROM journal_items ji
             JOIN chart_of_accounts coa ON coa.id = ji.account_id
@@ -154,7 +156,7 @@ router.get('/journals/:id', (req, res) => {
 });
 
 // Create and Post a Manual Journal Entry (Strict Double-Entry Bookkeeping)
-router.post('/journals', (req, res) => {
+router.post('/journals', async (req, res) => {
     try {
         const { entryDate, postingDate, reference, description, items } = req.body;
         if (!description) {
@@ -165,7 +167,7 @@ router.post('/journals', (req, res) => {
         }
 
         const username = req.user ? req.user.username : 'Admin';
-        const result = AccountingEngine.postJournalEntry({
+        const result = await AccountingEngine.postJournalEntry({
             entryDate: entryDate || new Date().toISOString().split('T')[0],
             postingDate: postingDate || new Date().toISOString().split('T')[0],
             reference: reference || '',
@@ -182,12 +184,12 @@ router.post('/journals', (req, res) => {
     }
 });
 
-// Reverse a Posted Journal Entry (Never hard-delete posted financial transactions)
-router.post('/journals/:id/reverse', (req, res) => {
+// Reverse a Posted Journal Entry
+router.post('/journals/:id/reverse', async (req, res) => {
     try {
         const { reason } = req.body;
         const username = req.user ? req.user.username : 'Admin';
-        const result = AccountingEngine.reverseJournalEntry(req.params.id, reason || 'User requested correction', username);
+        const result = await AccountingEngine.reverseJournalEntry(req.params.id, reason || 'User requested correction', username);
 
         res.json({
             success: true,
@@ -200,10 +202,10 @@ router.post('/journals/:id/reverse', (req, res) => {
 });
 
 // Trial Balance
-router.get('/trial-balance', (req, res) => {
+router.get('/trial-balance', async (req, res) => {
     try {
         const { asOfDate } = req.query;
-        const tb = ReportsService.getTrialBalance({ asOfDate });
+        const tb = await ReportsService.getTrialBalance({ asOfDate });
         res.json({ success: true, trialBalance: tb });
     } catch (err) {
         res.status(500).json({ success: false, error: err.message });

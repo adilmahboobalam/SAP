@@ -3,15 +3,15 @@ const router = express.Router();
 const db = require('../db/database');
 const ReportsService = require('../services/reportsService');
 
-router.get('/kpis', (req, res) => {
+router.get('/kpis', async (req, res) => {
     try {
         // P&L figures from actual general ledger transactions
-        const pnl = ReportsService.getProfitAndLoss();
+        const pnl = await ReportsService.getProfitAndLoss();
         // Balance sheet figures from actual general ledger transactions
-        const bs = ReportsService.getBalanceSheet();
+        const bs = await ReportsService.getBalanceSheet();
 
         // Accounts Receivable (Outstanding balance from unpaid posted sales invoices)
-        const arRow = db.prepare(`
+        const arRow = await db.prepare(`
             SELECT 
                 COUNT(*) as count,
                 COALESCE(SUM(total_amount - paid_amount), 0.0) as amount
@@ -21,7 +21,7 @@ router.get('/kpis', (req, res) => {
         `).get();
 
         // Accounts Payable (Outstanding balance from unpaid posted vendor bills)
-        const apRow = db.prepare(`
+        const apRow = await db.prepare(`
             SELECT 
                 COUNT(*) as count,
                 COALESCE(SUM(total_amount - paid_amount), 0.0) as amount
@@ -31,7 +31,7 @@ router.get('/kpis', (req, res) => {
         `).get();
 
         // Total Cash & Bank Balance directly calculated from GL Cash & Bank accounts
-        const cashRow = db.prepare(`
+        const cashRow = await db.prepare(`
             SELECT COALESCE(SUM(ji.debit) - SUM(ji.credit), 0.0) as total_cash
             FROM journal_items ji
             JOIN journal_entries je ON je.id = ji.journal_entry_id AND je.status = 'POSTED'
@@ -40,11 +40,19 @@ router.get('/kpis', (req, res) => {
         `).get();
 
         // Pending Expenses
-        const pendingExpRow = db.prepare(`
+        const pendingExpRow = await db.prepare(`
             SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0.0) as amount
             FROM expenses
             WHERE status = 'SUBMITTED'
         `).get();
+
+        const arAmount = Number(arRow?.amount) || 0;
+        const arCount = Number(arRow?.count) || 0;
+        const apAmount = Number(apRow?.amount) || 0;
+        const apCount = Number(apRow?.count) || 0;
+        const cashBalance = Number(cashRow?.total_cash) || 0;
+        const pendingExpCount = Number(pendingExpRow?.count) || 0;
+        const pendingExpAmount = Number(pendingExpRow?.amount) || 0;
 
         res.json({
             success: true,
@@ -54,24 +62,25 @@ router.get('/kpis', (req, res) => {
                 netProfit: pnl.netProfit,
                 totalAssets: bs.assets.total,
                 totalLiabilities: bs.liabilities.total,
-                accountsReceivable: Math.round(arRow.amount * 100) / 100,
-                arCount: arRow.count,
-                accountsPayable: Math.round(apRow.amount * 100) / 100,
-                apCount: apRow.count,
-                cashAndBankBalance: Math.round(cashRow.total_cash * 100) / 100,
-                pendingExpensesCount: pendingExpRow.count,
-                pendingExpensesAmount: Math.round(pendingExpRow.amount * 100) / 100
+                accountsReceivable: Math.round(arAmount * 100) / 100,
+                arCount: arCount,
+                accountsPayable: Math.round(apAmount * 100) / 100,
+                apCount: apCount,
+                cashAndBankBalance: Math.round(cashBalance * 100) / 100,
+                pendingExpensesCount: pendingExpCount,
+                pendingExpensesAmount: Math.round(pendingExpAmount * 100) / 100
             }
         });
     } catch (err) {
+        console.error('KPIs Error:', err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-router.get('/charts', (req, res) => {
+router.get('/charts', async (req, res) => {
     try {
         // Monthly Revenue vs Expenses for the current year
-        const monthlyData = db.prepare(`
+        const monthlyData = await db.prepare(`
             SELECT 
                 m.month_num,
                 m.month_name,
@@ -111,32 +120,41 @@ router.get('/charts', (req, res) => {
         `).all();
 
         // Expense category breakdown for donut chart
-        const expenseCategories = db.prepare(`
+        const expenseCategories = await db.prepare(`
             SELECT ec.name, COALESCE(SUM(e.total_amount), 0.0) as amount
             FROM expense_categories ec
             LEFT JOIN expenses e ON e.category_id = ec.id AND e.status = 'POSTED'
-            GROUP BY ec.id
-            HAVING amount > 0
+            GROUP BY ec.id, ec.name
+            HAVING COALESCE(SUM(e.total_amount), 0.0) > 0
             ORDER BY amount DESC
         `).all();
 
         // AR Aging summary for bar chart
-        const arAging = ReportsService.getArAging();
+        const arAging = await ReportsService.getArAging();
 
         res.json({
             success: true,
-            monthlyComparison: monthlyData,
-            expenseBreakdown: expenseCategories,
+            monthlyComparison: monthlyData.map(r => ({
+                month_num: r.month_num,
+                month_name: r.month_name,
+                revenue: Number(r.revenue) || 0,
+                expenses: Number(r.expenses) || 0
+            })),
+            expenseBreakdown: expenseCategories.map(r => ({
+                name: r.name,
+                amount: Number(r.amount) || 0
+            })),
             arAgingSummary: arAging.totals
         });
     } catch (err) {
+        console.error('Charts Error:', err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-router.get('/recent-transactions', (req, res) => {
+router.get('/recent-transactions', async (req, res) => {
     try {
-        const transactions = db.prepare(`
+        const transactions = await db.prepare(`
             SELECT 
                 je.id, je.entry_number, je.entry_date, je.posting_date,
                 je.reference, je.description, je.source_module, je.status,
@@ -148,14 +166,15 @@ router.get('/recent-transactions', (req, res) => {
 
         res.json({ success: true, transactions });
     } catch (err) {
+        console.error('Recent Transactions Error:', err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-router.get('/upcoming-dues', (req, res) => {
+router.get('/upcoming-dues', async (req, res) => {
     try {
         // Upcoming Customer Invoices Due
-        const upcomingInvoices = db.prepare(`
+        const upcomingInvoices = await db.prepare(`
             SELECT 
                 inv.id, inv.invoice_number, inv.due_date,
                 (inv.total_amount - inv.paid_amount) as amount_due,
@@ -169,7 +188,7 @@ router.get('/upcoming-dues', (req, res) => {
         `).all();
 
         // Upcoming Vendor Bills Due
-        const upcomingBills = db.prepare(`
+        const upcomingBills = await db.prepare(`
             SELECT 
                 bill.id, bill.bill_number, bill.due_date,
                 (bill.total_amount - bill.paid_amount) as amount_due,
@@ -182,8 +201,13 @@ router.get('/upcoming-dues', (req, res) => {
             LIMIT 5
         `).all();
 
-        res.json({ success: true, upcomingInvoices, upcomingBills });
+        res.json({
+            success: true,
+            upcomingInvoices: upcomingInvoices.map(r => ({ ...r, amount_due: Number(r.amount_due) || 0 })),
+            upcomingBills: upcomingBills.map(r => ({ ...r, amount_due: Number(r.amount_due) || 0 }))
+        });
     } catch (err) {
+        console.error('Upcoming Dues Error:', err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
