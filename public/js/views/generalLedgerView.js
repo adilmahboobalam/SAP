@@ -326,7 +326,7 @@ const GeneralLedgerView = {
             sheet.innerHTML = `
                 <div class="sap-report-container">
                     <div class="sap-report-header">
-                        <div class="sap-report-company">Apex Enterprise Solutions Corp.</div>
+                        <div class="sap-report-company">${window.App?.company?.legal_name || window.App?.company?.name || 'Enterprise Financials'}</div>
                         <div class="sap-report-title">General Ledger Trial Balance</div>
                         <div class="sap-report-period">As of ${tb.asOfDate} • Verified Double-Entry Ledger</div>
                     </div>

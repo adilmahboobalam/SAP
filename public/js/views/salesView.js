@@ -724,9 +724,9 @@ const SalesView = {
                                     <div style="font-size: 12px; color: #64748b; margin-top: 4px;">Date: ${inv.invoice_date} | Due: ${inv.due_date}</div>
                                 </div>
                                 <div style="text-align: right;">
-                                    <div style="font-weight: 800; font-size: 15px;">Apex Enterprise Solutions Corp.</div>
-                                    <div style="font-size: 11.5px; color: #64748b;">100 Enterprise Blvd, New York, NY</div>
-                                    <div style="font-size: 11.5px; color: #64748b;">Tax ID: US-94-2849102</div>
+                                    <div style="font-weight: 800; font-size: 15px;">${window.App?.company?.legal_name || window.App?.company?.name || 'Enterprise Financials'}</div>
+                                    ${window.App?.company?.address ? `<div style="font-size: 11.5px; color: #64748b;">${window.App.company.address}${window.App.company.city ? ', ' + window.App.company.city : ''}</div>` : ''}
+                                    ${window.App?.company?.tax_id ? `<div style="font-size: 11.5px; color: #64748b;">Tax ID: ${window.App.company.tax_id}</div>` : ''}
                                 </div>
                             </div>
 

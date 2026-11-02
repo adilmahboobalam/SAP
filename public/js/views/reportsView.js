@@ -9,6 +9,9 @@ const ReportsView = {
     startDate: '2026-01-01',
     endDate: '2026-12-31',
     accounts: [],
+    getCompanyName() {
+        return window.App?.company?.legal_name || window.App?.company?.name || 'Enterprise Financials';
+    },
 
     async render(container, defaultReport = 'pnl') {
         this.selectedReport = defaultReport;
@@ -168,7 +171,7 @@ const ReportsView = {
         container.innerHTML = `
             <div class="sap-report-container">
                 <div class="sap-report-header">
-                    <div class="sap-report-company">Apex Enterprise Solutions Corp.</div>
+                    <div class="sap-report-company">${this.getCompanyName()}</div>
                     <div class="sap-report-title">Profit & Loss Statement (Income Statement)</div>
                     <div class="sap-report-period">For the Period: ${this.startDate} through ${this.endDate}</div>
                 </div>
@@ -231,7 +234,7 @@ const ReportsView = {
         container.innerHTML = `
             <div class="sap-report-container">
                 <div class="sap-report-header">
-                    <div class="sap-report-company">Apex Enterprise Solutions Corp.</div>
+                    <div class="sap-report-company">${this.getCompanyName()}</div>
                     <div class="sap-report-title">Statement of Financial Position (Balance Sheet)</div>
                     <div class="sap-report-period">As of: ${this.endDate} • Verified Balanced</div>
                 </div>
@@ -313,7 +316,7 @@ const ReportsView = {
         container.innerHTML = `
             <div class="sap-report-container">
                 <div class="sap-report-header">
-                    <div class="sap-report-company">Apex Enterprise Solutions Corp.</div>
+                    <div class="sap-report-company">${this.getCompanyName()}</div>
                     <div class="sap-report-title">Statement of Cash Flows (Direct Method)</div>
                     <div class="sap-report-period">For the Period: ${this.startDate} through ${this.endDate}</div>
                 </div>
@@ -376,7 +379,7 @@ const ReportsView = {
         container.innerHTML = `
             <div class="sap-report-container">
                 <div class="sap-report-header">
-                    <div class="sap-report-company">Apex Enterprise Solutions Corp.</div>
+                    <div class="sap-report-company">${this.getCompanyName()}</div>
                     <div class="sap-report-title">General Ledger Trial Balance</div>
                     <div class="sap-report-period">As of ${tb.asOfDate}</div>
                 </div>
@@ -422,7 +425,7 @@ const ReportsView = {
         container.innerHTML = `
             <div class="sap-report-container" style="max-width: 100%;">
                 <div class="sap-report-header">
-                    <div class="sap-report-company">Apex Enterprise Solutions Corp.</div>
+                    <div class="sap-report-company">${this.getCompanyName()}</div>
                     <div class="sap-report-title">General Ledger Full Audit Trail</div>
                     <div class="sap-report-period">${this.startDate} to ${this.endDate}</div>
                 </div>
@@ -465,7 +468,7 @@ const ReportsView = {
         container.innerHTML = `
             <div class="sap-report-container" style="max-width: 100%;">
                 <div class="sap-report-header">
-                    <div class="sap-report-company">Apex Enterprise Solutions Corp.</div>
+                    <div class="sap-report-company">${this.getCompanyName()}</div>
                     <div class="sap-report-title">Accounts Receivable Aging Report</div>
                     <div class="sap-report-period">As of ${ar.asOfDate}</div>
                 </div>
@@ -521,7 +524,7 @@ const ReportsView = {
         container.innerHTML = `
             <div class="sap-report-container" style="max-width: 100%;">
                 <div class="sap-report-header">
-                    <div class="sap-report-company">Apex Enterprise Solutions Corp.</div>
+                    <div class="sap-report-company">${this.getCompanyName()}</div>
                     <div class="sap-report-title">Accounts Payable Aging Report</div>
                     <div class="sap-report-period">As of ${ap.asOfDate}</div>
                 </div>
@@ -577,7 +580,7 @@ const ReportsView = {
         container.innerHTML = `
             <div class="sap-report-container">
                 <div class="sap-report-header">
-                    <div class="sap-report-company">Apex Enterprise Solutions Corp.</div>
+                    <div class="sap-report-company">${this.getCompanyName()}</div>
                     <div class="sap-report-title">Corporate Operating Expenses Report</div>
                     <div class="sap-report-period">${this.startDate} to ${this.endDate}</div>
                 </div>
@@ -627,7 +630,7 @@ const ReportsView = {
         container.innerHTML = `
             <div class="sap-report-container">
                 <div class="sap-report-header">
-                    <div class="sap-report-company">Apex Enterprise Solutions Corp.</div>
+                    <div class="sap-report-company">${this.getCompanyName()}</div>
                     <div class="sap-report-title">Sales Revenue by Customer Report</div>
                     <div class="sap-report-period">${this.startDate} to ${this.endDate}</div>
                 </div>
@@ -663,7 +666,7 @@ const ReportsView = {
         container.innerHTML = `
             <div class="sap-report-container">
                 <div class="sap-report-header">
-                    <div class="sap-report-company">Apex Enterprise Solutions Corp.</div>
+                    <div class="sap-report-company">${this.getCompanyName()}</div>
                     <div class="sap-report-title">Procurement & Purchases by Supplier</div>
                     <div class="sap-report-period">${this.startDate} to ${this.endDate}</div>
                 </div>
@@ -699,7 +702,7 @@ const ReportsView = {
         container.innerHTML = `
             <div class="sap-report-container">
                 <div class="sap-report-header">
-                    <div class="sap-report-company">Apex Enterprise Solutions Corp.</div>
+                    <div class="sap-report-company">${this.getCompanyName()}</div>
                     <div class="sap-report-title">Statutory Tax Audit Report (Input vs Output Tax)</div>
                     <div class="sap-report-period">${this.startDate} to ${this.endDate}</div>
                 </div>
@@ -761,7 +764,7 @@ const ReportsView = {
         container.innerHTML = `
             <div class="sap-report-container">
                 <div class="sap-report-header">
-                    <div class="sap-report-company">Apex Enterprise Solutions Corp.</div>
+                    <div class="sap-report-company">${this.getCompanyName()}</div>
                     <div class="sap-report-title">Bank Reconciliation Audit Statement</div>
                     <div class="sap-report-period">Statement Cut-Off: ${r.reconciliation.statement_date} • ${r.reconciliation.bank_name}</div>
                 </div>

@@ -122,14 +122,15 @@ npm run seed
 
 ---
 
-## 🔐 Enterprise User Personas & Demo Accounts
+## 🔐 User Authentication & Enterprise Roles
 
-Use the **User Chip** in the top navigation bar to switch between user personas:
+Use the **User Chip** in the top navigation bar to switch between enterprise roles:
 
 | Username | Name | Role | Access Level |
 |---|---|---|---|
-| `admin` | Alexander Wright | **Super Admin** | Full master control, system administration, and accounting |
-| `finance.manager` | Elena Vance, CPA | **Finance Manager** | Financial statements, GL posting, reversals, and approvals |
-| `accountant` | Marcus Brooks | **Accountant** | Daily bookkeeping, billing, vendor bills, and bank transfers |
-| `auditor` | Sophia Chen | **Auditor** | Read-only ledger verification, trial balances, and audit trails |
-| `viewer` | David Miller | **Viewer** | Executive read-only financial statement inspection |
+| `admin` | System Administrator | **Super Admin** | Full master control, system administration, and accounting |
+| `finance` | Finance Manager | **Finance Manager** | Financial statements, GL posting, reversals, and approvals |
+| `accountant` | Staff Accountant | **Accountant** | Daily bookkeeping, billing, vendor bills, and bank transfers |
+| `auditor` | Internal Auditor | **Auditor** | Read-only ledger verification, trial balances, and audit trails |
+| `viewer` | Executive Viewer | **Viewer** | Executive read-only financial statement inspection |
+

@@ -87,9 +87,21 @@ router.post('/switch-role', (req, res) => {
         }
 
         // Find user with this role
-        const targetUser = db.prepare('SELECT * FROM users WHERE role = ? AND is_active = 1 LIMIT 1').get(role);
+        let targetUser = db.prepare('SELECT * FROM users WHERE role = ? AND is_active = 1 LIMIT 1').get(role);
         if (!targetUser) {
-            return res.status(404).json({ success: false, error: `No active user found with role ${role}` });
+            const adminUser = db.prepare("SELECT * FROM users WHERE (role = 'Super Admin' OR role = 'Admin') AND is_active = 1 LIMIT 1").get();
+            if (adminUser) {
+                targetUser = {
+                    id: adminUser.id,
+                    username: adminUser.username,
+                    email: adminUser.email,
+                    full_name: `${adminUser.full_name} (${role})`,
+                    role: role,
+                    department: adminUser.department
+                };
+            } else {
+                return res.status(404).json({ success: false, error: `No active user found with role ${role}` });
+            }
         }
 
         const token = jwt.sign(

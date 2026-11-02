@@ -14,6 +14,7 @@ const App = {
         try {
             const meData = await window.API.get('/api/auth/me');
             this.activeUser = meData.user;
+            this.company = meData.company;
             this.renderShellUserInfo();
         } catch (e) {
             console.warn('Using default administrator session:', e.message);
@@ -347,11 +348,11 @@ const App = {
         }
 
         const roles = [
-            { role: 'Super Admin', user: 'Alexander Wright', desc: 'Full enterprise control, posting, reversing, RBAC admin' },
-            { role: 'Finance Manager', user: 'Elena Vance, CPA', desc: 'Financial statements, GL postings, journal reversals, approvals' },
-            { role: 'Accountant', user: 'Marcus Brooks', desc: 'Daily bookkeeping, customer billing, vendor bills, bank transfers' },
-            { role: 'Auditor', user: 'Sophia Chen', desc: 'Read-only audit trail verification, trial balances, reconciliation check' },
-            { role: 'Viewer', user: 'David Miller', desc: 'Read-only financial statement inspection' }
+            { role: 'Super Admin', user: 'System Administrator', desc: 'Full enterprise control, posting, reversing, RBAC admin' },
+            { role: 'Finance Manager', user: 'Finance Manager', desc: 'Financial statements, GL postings, journal reversals, approvals' },
+            { role: 'Accountant', user: 'Staff Accountant', desc: 'Daily bookkeeping, customer billing, vendor bills, bank transfers' },
+            { role: 'Auditor', user: 'Internal Auditor', desc: 'Read-only audit trail verification, trial balances, reconciliation check' },
+            { role: 'Viewer', user: 'Executive Viewer', desc: 'Read-only financial statement inspection' }
         ];
 
         modalEl.innerHTML = `
