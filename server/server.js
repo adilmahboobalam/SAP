@@ -60,12 +60,14 @@ app.use((err, req, res, next) => {
     });
 });
 
-app.listen(PORT, () => {
-    console.log(`=======================================================`);
-    console.log(`   ApexERP Financials Enterprise - Server Running       `);
-    console.log(`   URL: http://localhost:${PORT}                         `);
-    console.log(`   Double-Entry Engine: ACTIVE (SQL ACID Ledger)        `);
-    console.log(`=======================================================`);
-});
+if (!process.env.VERCEL) {
+    app.listen(PORT, () => {
+        console.log(`=======================================================`);
+        console.log(`   ApexERP Financials Enterprise - Server Running       `);
+        console.log(`   URL: http://localhost:${PORT}                         `);
+        console.log(`   Double-Entry Engine: ACTIVE (SQL ACID Ledger)        `);
+        console.log(`=======================================================`);
+    });
+}
 
 module.exports = app;
