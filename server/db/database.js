@@ -5,20 +5,65 @@ require('dotenv').config();
 types.setTypeParser(1700, val => (val === null ? 0 : parseFloat(val)));
 types.setTypeParser(20, val => (val === null ? 0 : parseInt(val, 10)));
 
-const connectionString = process.env.DATABASE_URL;
-
-let pool = null;
-if (connectionString) {
-    pool = new Pool({
-        connectionString,
+function parseDatabaseConfig(rawUrl) {
+    const defaults = {
+        user: 'postgres',
+        password: '@SAPmy522@?',
+        host: 'db.srnjpgwpkkudkrjhwkzt.supabase.co',
+        port: 5432,
+        database: 'postgres',
         ssl: { rejectUnauthorized: false },
         max: 10,
         idleTimeoutMillis: 30000,
         connectionTimeoutMillis: 10000
-    });
-} else {
-    console.warn('DATABASE_URL environment variable is not defined.');
+    };
+
+    if (!rawUrl) return defaults;
+
+    let str = rawUrl.trim();
+    if ((str.startsWith('"') && str.endsWith('"')) || (str.startsWith("'") && str.endsWith("'"))) {
+        str = str.slice(1, -1).trim();
+    }
+
+    try {
+        const parsed = new URL(str);
+        const pass = decodeURIComponent(parsed.password || '');
+        return {
+            user: decodeURIComponent(parsed.username || defaults.user),
+            password: (!pass || pass === '[YOUR-PASSWORD]') ? defaults.password : pass,
+            host: parsed.hostname || defaults.host,
+            port: parseInt(parsed.port || '5432', 10),
+            database: (parsed.pathname ? parsed.pathname.replace(/^\//, '') : '') || defaults.database,
+            ssl: { rejectUnauthorized: false },
+            max: 10,
+            idleTimeoutMillis: 30000,
+            connectionTimeoutMillis: 10000
+        };
+    } catch (e) {
+        // Fallback for unencoded characters in password (like '@' or '?')
+        const match = str.match(/^postgres(?:ql)?:\/\/([^:]+):(.*)@([^:/]+)(?::(\d+))?\/([^?]+)(?:\?.*)?$/);
+        if (match) {
+            let pass = match[2];
+            try { pass = decodeURIComponent(pass); } catch (err) {}
+            return {
+                user: decodeURIComponent(match[1]),
+                password: (!pass || pass === '[YOUR-PASSWORD]') ? defaults.password : pass,
+                host: match[3],
+                port: parseInt(match[4] || '5432', 10),
+                database: match[5],
+                ssl: { rejectUnauthorized: false },
+                max: 10,
+                idleTimeoutMillis: 30000,
+                connectionTimeoutMillis: 10000
+            };
+        }
+    }
+
+    return defaults;
 }
+
+const poolConfig = parseDatabaseConfig(process.env.DATABASE_URL);
+const pool = new Pool(poolConfig);
 
 function toPgSql(sql) {
     let index = 1;
@@ -98,4 +143,3 @@ const db = {
 };
 
 module.exports = db;
-
